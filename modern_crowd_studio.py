@@ -1073,16 +1073,37 @@ class CrowdAnalysisStudio:
                     print("✅ Analysis completed successfully")
                     self.show_status("✅ Analysis complete!", "green")
                     
-                    # Generate plots
-                    self.show_status("� Generating visualization plots...", "blue")
-                    plot_result = subprocess.run([sys.executable, 'generate_all_plots.py'], 
+                    # Generate plots with cross-platform compatibility
+                    self.show_status("🎨 Generating visualization plots...", "blue")
+                    
+                    # Use Windows-compatible generator if on Windows
+                    plot_script = "generate_all_plots_windows.py" if os.name == 'nt' else "generate_all_plots.py"
+                    
+                    # Force clear existing plots on Windows to prevent caching issues
+                    if os.name == 'nt':
+                        try:
+                            import shutil
+                            from pathlib import Path
+                            plots_dir = Path('generated_plots')
+                            if plots_dir.exists():
+                                shutil.rmtree(plots_dir)
+                            plots_dir.mkdir(exist_ok=True)
+                            print("🧹 Windows: Cleared existing plots cache")
+                        except Exception as e:
+                            print(f"⚠️ Windows cache clear warning: {e}")
+                    
+                    print(f"📊 Using plot generator: {plot_script}")
+                    plot_result = subprocess.run([sys.executable, plot_script], 
                                                capture_output=True, text=True, cwd=os.getcwd())
                     
                     if plot_result.returncode == 0:
                         print("✅ Plots generated successfully")
+                        print(plot_result.stdout)
                         self.show_status("🎯 Analysis & visualization complete!", "green")
                     else:
-                        print(f"⚠️ Plot generation had issues: {plot_result.stderr}")
+                        print(f"❌ Plot generation failed: {plot_result.stderr}")
+                        print(f"Plot generator output: {plot_result.stdout}")
+                        self.show_status("⚠️ Analysis complete, but plot generation had issues", "orange")
                         self.show_status("✅ Analysis complete (plot issues)", "orange")
                 else:
                     print(f"❌ Background analysis failed: {result.stderr}")
