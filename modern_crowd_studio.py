@@ -1073,26 +1073,13 @@ class CrowdAnalysisStudio:
                     print("✅ Analysis completed successfully")
                     self.show_status("✅ Analysis complete!", "green")
                     
-                    # Generate plots with cross-platform compatibility
+                    # Generate plots with original visualization system
                     self.show_status("🎨 Generating visualization plots...", "blue")
                     
-                    # Use Windows-compatible generator if on Windows
-                    plot_script = "generate_all_plots_windows.py" if os.name == 'nt' else "generate_all_plots.py"
+                    # Always use original plot generator for consistent results
+                    plot_script = "generate_all_plots.py"
                     
-                    # Force clear existing plots on Windows to prevent caching issues
-                    if os.name == 'nt':
-                        try:
-                            import shutil
-                            from pathlib import Path
-                            plots_dir = Path('generated_plots')
-                            if plots_dir.exists():
-                                shutil.rmtree(plots_dir)
-                            plots_dir.mkdir(exist_ok=True)
-                            print("🧹 Windows: Cleared existing plots cache")
-                        except Exception as e:
-                            print(f"⚠️ Windows cache clear warning: {e}")
-                    
-                    print(f"📊 Using plot generator: {plot_script}")
+                    print(f"📊 Using original plot generator: {plot_script}")
                     plot_result = subprocess.run([sys.executable, plot_script], 
                                                capture_output=True, text=True, cwd=os.getcwd())
                     

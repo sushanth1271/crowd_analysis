@@ -27,11 +27,11 @@ def create_output_directory():
     return output_dir
 
 def generate_crowd_data_plots(output_dir):
-    """Generate crowd data visualization plots"""
+    """Generate crowd data visualization plots using original method"""
     print("📊 Generating crowd data plots...")
     
     try:
-        # Load crowd data
+        # Load crowd data exactly as in original system
         human_count = []
         violate_count = []
         restricted_entry = []
@@ -46,7 +46,7 @@ def generate_crowd_data_plots(output_dir):
                 restricted_entry.append(bool(int(row[3])))
                 abnormal_activity.append(bool(int(row[4])))
 
-        # Load video metadata
+        # Load video metadata using original format
         with open('processed_data/video_data.json', 'r') as file:
             data = json.load(file)
             data_record_frame = data["DATA_RECORD_FRAME"]
@@ -381,72 +381,64 @@ def generate_analytics_summary_plot(output_dir):
     print("📈 Generating analytics summary plot...")
     
     try:
-        from utils.analytics import CrowdDataAnalyzer
+        # Load crowd data for summary
+        crowd_data = pd.read_csv('processed_data/crowd_data.csv')
         
-        analyzer = CrowdDataAnalyzer('processed_data')
-        
-        # Get analytics data
-        crowd_analysis = analyzer.analyze_crowd_density()
-        social_analysis = analyzer.analyze_social_distancing()
-        abnormal_analysis = analyzer.analyze_abnormal_activity()
-        
-        # Create a comprehensive dashboard
+        # Create comprehensive dashboard
         fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
-        fig.suptitle('Crowd Analysis Dashboard', fontsize=20, fontweight='bold')
-        
-        # 1. Crowd size over time
-        if analyzer.crowd_data is not None:
-            ax1.plot(analyzer.crowd_data['Human Count'], color='blue', linewidth=2)
-            ax1.set_title('Crowd Size Over Time', fontsize=14, fontweight='bold')
-            ax1.set_xlabel('Frame')
-            ax1.set_ylabel('Number of People')
-            ax1.grid(True, alpha=0.3)
-            
-            # 2. Social distance violations
-            ax2.plot(analyzer.crowd_data['Social Distance violate'], color='red', linewidth=2)
-            ax2.set_title('Social Distance Violations', fontsize=14, fontweight='bold')
-            ax2.set_xlabel('Frame')
-            ax2.set_ylabel('Violation Count')
-            ax2.grid(True, alpha=0.3)
-            
-            # 3. Summary statistics pie chart
-            violation_frames = (analyzer.crowd_data['Social Distance violate'] > 0).sum()
-            normal_frames = len(analyzer.crowd_data) - violation_frames
-            
-            ax3.pie([normal_frames, violation_frames], 
-                   labels=['Normal', 'Violations'], 
-                   colors=['green', 'red'],
-                   autopct='%1.1f%%')
-            ax3.set_title('Frame Distribution', fontsize=14, fontweight='bold')
-            
-            # 4. Key metrics table
-            ax4.axis('off')
-            metrics = [
-                ['Metric', 'Value'],
-                ['Avg Crowd Size', f"{crowd_analysis.get('avg_crowd_size', 0):.1f}"],
-                ['Peak Crowd Size', f"{crowd_analysis.get('max_crowd_size', 0)}"],
-                ['Violation Rate', f"{social_analysis.get('violation_rate', 0):.1%}"],
-                ['Total Violations', f"{social_analysis.get('total_violations', 0)}"],
-                ['Abnormal Rate', f"{abnormal_analysis.get('abnormal_rate', 0):.1%}"],
-            ]
-            
-            table = ax4.table(cellText=metrics[1:], 
-                             colLabels=metrics[0],
-                             cellLoc='center',
-                             loc='center')
-            table.auto_set_font_size(False)
-            table.set_fontsize(12)
-            table.scale(1.2, 2)
-            ax4.set_title('Key Metrics', fontsize=14, fontweight='bold', pad=20)
-        
+        fig.suptitle('Crowd Analysis Dashboard - Original Style', fontsize=16, fontweight='bold')
+
+        # Time series plot
+        ax1.plot(crowd_data.index, crowd_data.iloc[:, 1], 'g-', linewidth=3, label='Human Count')
+        ax1.plot(crowd_data.index, crowd_data.iloc[:, 2], 'orange', linewidth=3, label='Violations')
+        ax1.set_title('Crowd Data Over Time')
+        ax1.set_xlabel('Time Index')
+        ax1.set_ylabel('Count')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+
+        # Distribution histogram
+        ax2.hist(crowd_data.iloc[:, 1], bins=15, alpha=0.7, color='green', edgecolor='black')
+        ax2.set_title('Human Count Distribution')
+        ax2.set_xlabel('Number of People')
+        ax2.set_ylabel('Frequency')
+        ax2.grid(True, alpha=0.3)
+
+        # Violation analysis
+        violation_frames = len(crowd_data[crowd_data.iloc[:, 2] > 0])
+        normal_frames = len(crowd_data) - violation_frames
+        ax3.pie([normal_frames, violation_frames], 
+               labels=['Normal', 'Violations'], 
+               colors=['green', 'red'],
+               autopct='%1.1f%%')
+        ax3.set_title('Frame Distribution')
+
+        # Summary statistics
+        ax4.axis('off')
+        stats_text = f"""ANALYSIS SUMMARY
+
+Max People: {crowd_data.iloc[:, 1].max()}
+Avg People: {crowd_data.iloc[:, 1].mean():.1f}
+Min People: {crowd_data.iloc[:, 1].min()}
+
+Total Violations: {crowd_data.iloc[:, 2].sum()}
+Avg Violations: {crowd_data.iloc[:, 2].mean():.1f}
+
+Data Points: {len(crowd_data)}
+
+Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
+
+        ax4.text(0.05, 0.95, stats_text, fontsize=11, verticalalignment='top',
+                bbox=dict(boxstyle="round,pad=0.5", facecolor="lightblue", alpha=0.8),
+                transform=ax4.transAxes, fontfamily='monospace')
+
         plt.tight_layout()
-        
-        # Save dashboard
-        dashboard_path = output_dir / 'analytics_dashboard.png'
-        plt.savefig(dashboard_path, dpi=300, bbox_inches='tight')
+
+        # Save analytics summary
+        summary_path = output_dir / 'analytics_summary.png'
+        plt.savefig(summary_path, dpi=300, bbox_inches='tight')
         plt.close()
-        
-        print(f"   ✅ Saved: {dashboard_path}")
+        print(f"   ✅ Saved: {summary_path}")
         
         return True
         
