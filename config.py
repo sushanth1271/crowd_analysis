@@ -2,7 +2,7 @@ import datetime
 
 # Video Path
 VIDEO_CONFIG = {
-	"VIDEO_CAP" : "/Users/levi/Videos/7.mp4",
+	"VIDEO_CAP" : "C:/Users/Ramesh/Downloads/mall.mp4",
 	"IS_CAM" : False,
 	"CAM_APPROX_FPS": 3,
 	"HIGH_CAM": True,

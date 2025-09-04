@@ -6,6 +6,18 @@ Fixes cross-platform file handling issues
 import matplotlib
 matplotlib.use('Agg')  # Non-interactive backend for Windows
 import matplotlib.pyplot as plt
+import sys
+import os
+# Ensure stdout/stderr use UTF-8 to avoid UnicodeEncodeError on Windows consoles
+try:
+    # Also set env so any subprocesses inherit UTF-8 if needed
+    os.environ.setdefault('PYTHONIOENCODING', 'utf-8')
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8')
+except Exception:
+    pass
 import pandas as pd
 import numpy as np
 import seaborn as sns
@@ -13,7 +25,7 @@ from pathlib import Path
 import os
 import time
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import csv
 
@@ -42,8 +54,16 @@ def create_windows_directory(output_dir):
         output_dir = Path(output_dir)
         output_dir.mkdir(exist_ok=True)
         
-        # Set Windows permissions
-        os.chmod(output_dir, 0o777)
+        # Try to set permissive permissions. os.chmod may be limited on Windows; use icacls as fallback.
+        try:
+            os.chmod(output_dir, 0o777)
+        except Exception:
+            try:
+                # Grant Everyone full control (silent)
+                os.system(f'icacls "{str(output_dir)}" /grant Everyone:F /T >nul 2>&1')
+            except Exception:
+                pass
+
         print(f"📁 Directory ready: {output_dir}")
         return True
     except Exception as e:
@@ -54,33 +74,73 @@ def safe_plot_save(plt_obj, file_path, plot_name):
     """Windows-safe plot saving with verification"""
     try:
         file_path = Path(file_path)
-        
-        # Delete existing file
-        if file_path.exists():
-            file_path.unlink()
-        
-        # Save plot
-        plt_obj.savefig(str(file_path), dpi=300, bbox_inches='tight', 
-                       facecolor='white', edgecolor='none')
-        
-        # Add small delay for Windows file system
-        time.sleep(0.1)
-        
-        # Verify creation
-        if file_path.exists():
-            size = file_path.stat().st_size
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            print(f"✅ [{timestamp}] Created: {plot_name} ({size} bytes)")
-            return True
-        else:
-            print(f"❌ Failed to create: {plot_name}")
-            return False
-            
+
+        # Create a temp filename that preserves the original image suffix so
+        # matplotlib can infer the correct format (e.g., name.tmp.png)
+        tmp_name = f"{file_path.stem}.tmp{file_path.suffix}"
+        tmp_path = file_path.parent / tmp_name
+
+        # Ensure parent exists
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Try saving to a temp file then atomically replace the target
+        max_attempts = 5
+        attempt = 0
+        while attempt < max_attempts:
+            try:
+                # Remove any existing temp file
+                if tmp_path.exists():
+                    try:
+                        tmp_path.unlink()
+                    except Exception:
+                        pass
+
+                plt_obj.savefig(str(tmp_path), dpi=300, bbox_inches='tight',
+                                facecolor='white', edgecolor='none')
+
+                # Small delay for filesystem sync
+                time.sleep(0.05)
+
+                # Atomically replace
+                try:
+                    os.replace(str(tmp_path), str(file_path))
+                except Exception:
+                    # On some systems os.replace may fail if file locked; try copy+remove
+                    try:
+                        if file_path.exists():
+                            file_path.unlink()
+                        tmp_path.replace(file_path)
+                    except Exception:
+                        pass
+
+                # Verify creation
+                if file_path.exists():
+                    size = file_path.stat().st_size
+                    timestamp = datetime.now().strftime("%H:%M:%S")
+                    print(f"✅ [{timestamp}] Created: {plot_name} ({size} bytes)")
+                    return True
+
+            except Exception as e:
+                # Retry on failure
+                import traceback
+                print(f"⚠️ Attempt {attempt+1} save error for {plot_name}: {e}")
+                traceback.print_exc()
+                time.sleep(0.1 * (attempt + 1))
+                attempt += 1
+
+        print(f"❌ Failed to create: {plot_name} after {max_attempts} attempts")
+        return False
+
     except Exception as e:
-        print(f"❌ Save error for {plot_name}: {e}")
+        import traceback
+        print(f"⛔ Save error for {plot_name}: {e}")
+        traceback.print_exc()
         return False
     finally:
-        plt_obj.close()
+        try:
+            plt_obj.close()
+        except Exception:
+            pass
 
 def generate_crowd_data_plots(output_dir):
     """Generate crowd data visualization plots"""
@@ -103,31 +163,42 @@ def generate_crowd_data_plots(output_dir):
                     restricted_entry.append(int(row[3]))
                     abnormal_activity.append(int(row[4]))
 
-        # Load video metadata
+        # Load video metadata (support multiple key formats)
         with open('processed_data/video_data.json', 'r') as file:
             video_data = json.load(file)
-            
-        start_time = video_data['start_time']
-        data_record_frame = video_data['data_record_frame']
-        vid_fps = video_data['vid_fps']
 
-        start_time = datetime.strptime(start_time, "%d/%m/%Y, %H:%M:%S")
-        time_steps = data_record_frame / vid_fps
+        # Normalize keys and provide sensible defaults
+        start_time = video_data.get('start_time') or video_data.get('START_TIME') or video_data.get('Start_Time')
+        data_record_frame = video_data.get('data_record_frame') or video_data.get('DATA_RECORD_FRAME') or 1
+        vid_fps = video_data.get('vid_fps') or video_data.get('VID_FPS') or 30
+
+        # Parse start_time string if present, otherwise use now
+        if start_time:
+            try:
+                start_time = datetime.strptime(start_time, "%d/%m/%Y, %H:%M:%S")
+            except Exception:
+                try:
+                    start_time = datetime.fromisoformat(start_time)
+                except Exception:
+                    start_time = datetime.now()
+        else:
+            start_time = datetime.now()
+
+        # Build time axis
+        try:
+            time_steps = float(data_record_frame) / float(vid_fps) if float(vid_fps) != 0 else 1.0
+        except Exception:
+            time_steps = 1.0
+
         data_length = len(human_count)
-
-        # Create time axis
         time_axis = []
+        time_cursor = start_time
+        for i in range(data_length):
+            time_axis.append(time_cursor)
+            time_cursor = time_cursor + timedelta(seconds=time_steps)
+
         graph_height = max(human_count) if human_count else 10
 
-        fig, ax = plt.subplots(figsize=(12, 8))
-        time = start_time
-        
-        for i in range(data_length):
-            time_axis.append(time)
-            time = time + pd.Timedelta(seconds=time_steps)
-
-        # Plot lines
-        violate_line, = plt.plot(time_axis, violate_count, linewidth=3, label="Violation Count", color='orange')
         crowd_line, = plt.plot(time_axis, human_count, linewidth=3, label="Crowd Count", color='green')
         
         plt.title("Crowd Data Analysis Over Time", fontsize=16, fontweight='bold')
@@ -155,28 +226,49 @@ def generate_movement_plots(output_dir):
     
     try:
         tracks = []
-        
+
+        # Movement CSV format can differ: some runs store the full track as a single
+        # space-separated string in column 3, while others place coords as separate
+        # CSV columns starting at index 3. Normalize by joining all columns from
+        # index 3 onward and splitting on whitespace and commas.
         with open('processed_data/movement_data.csv', 'r') as file:
             reader = csv.reader(file)
             next(reader)  # Skip header
             for row in reader:
                 if len(row) >= 4:
                     temp = []
-                    data = row[3].split()
+                    # Join all remaining columns and replace commas with spaces,
+                    # then split into tokens.
+                    raw = ' '.join(row[3:])
+                    raw = raw.replace(',', ' ')
+                    data = raw.split()
+                    # Build (x,y) pairs
                     for i in range(0, len(data)-1, 2):
-                        if i+1 < len(data):
-                            try:
-                                temp.append([int(data[i]), int(data[i+1])])
-                            except ValueError:
-                                continue
+                        try:
+                            x = int(float(data[i]))
+                            y = int(float(data[i+1]))
+                        except Exception:
+                            continue
+                        temp.append([x, y])
                     if len(temp) > 2:
                         tracks.append(temp)
 
         # Load video metadata
         with open('processed_data/video_data.json', 'r') as file:
             video_data = json.load(file)
-            frame_width = video_data['frame_width']
-            frame_height = video_data['frame_height']
+            frame_width = video_data.get('frame_width') or video_data.get('FRAME_WIDTH') or video_data.get('PROCESSED_FRAME_SIZE') or video_data.get('processed_frame_size')
+            frame_height = video_data.get('frame_height') or video_data.get('FRAME_HEIGHT')
+            if frame_width and not frame_height:
+                # Assume 16:9 aspect ratio if only width provided
+                try:
+                    frame_width = int(frame_width)
+                    frame_height = int(frame_width * 9 / 16)
+                except Exception:
+                    frame_width = int(frame_width or 1280)
+                    frame_height = int(frame_height or 720)
+            if not frame_width:
+                frame_width = 1280
+                frame_height = 720
 
         # Generate optical flow plot
         fig, ax = plt.subplots(figsize=(12, 8))
@@ -248,8 +340,19 @@ def generate_energy_analysis_plots(output_dir):
         # Load video metadata
         with open('processed_data/video_data.json', 'r') as file:
             video_data = json.load(file)
-            frame_width = video_data['frame_width']
-            frame_height = video_data['frame_height']
+            frame_width = video_data.get('frame_width') or video_data.get('FRAME_WIDTH') or video_data.get('PROCESSED_FRAME_SIZE') or video_data.get('processed_frame_size')
+            frame_height = video_data.get('frame_height') or video_data.get('FRAME_HEIGHT')
+            if frame_width and not frame_height:
+                # Assume 16:9 aspect ratio if only width provided
+                try:
+                    frame_width = int(frame_width)
+                    frame_height = int(frame_width * 9 / 16)
+                except Exception:
+                    frame_width = int(frame_width or 1280)
+                    frame_height = int(frame_height or 720)
+            if not frame_width:
+                frame_width = 1280
+                frame_height = 720
 
         # Load movement data and calculate energy
         tracks = []
@@ -370,10 +473,15 @@ def generate_analytics_summary_plot(output_dir):
     try:
         # Load all data
         crowd_df = pd.read_csv('processed_data/crowd_data.csv')
-        
-        # Create comprehensive dashboard
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
+
+        # Create dashboard with two top plots and a large bottom summary
+        fig = plt.figure(figsize=(15, 12))
         fig.suptitle('Complete Analytics Dashboard', fontsize=16, fontweight='bold')
+        gs = fig.add_gridspec(2, 2, height_ratios=[1, 0.8])
+
+        ax1 = fig.add_subplot(gs[0, 0])
+        ax2 = fig.add_subplot(gs[0, 1])
+        ax_summary = fig.add_subplot(gs[1, :])
 
         # Time series of crowd data
         ax1.plot(crowd_df.index, crowd_df['Human Count'], 'b-', linewidth=2, label='People Count')
@@ -394,22 +502,7 @@ def generate_analytics_summary_plot(output_dir):
         ax2.set_ylabel('Frequency')
         ax2.grid(True, alpha=0.3)
 
-        # Correlation analysis
-        correlation = crowd_df[['Human Count', 'Social Distance violate']].corr()
-        im = ax3.imshow(correlation, cmap='coolwarm', vmin=-1, vmax=1)
-        ax3.set_title('Data Correlation Matrix')
-        ax3.set_xticks(range(len(correlation.columns)))
-        ax3.set_yticks(range(len(correlation.columns)))
-        ax3.set_xticklabels(['People', 'Violations'], rotation=45)
-        ax3.set_yticklabels(['People', 'Violations'])
-        
-        # Add correlation values
-        for i in range(len(correlation.columns)):
-            for j in range(len(correlation.columns)):
-                ax3.text(j, i, f'{correlation.iloc[i, j]:.2f}', 
-                        ha='center', va='center', fontweight='bold')
-
-        # Summary statistics
+        # Summary statistics (large bottom area)
         stats_text = f"""ANALYSIS SUMMARY
 
 Max People: {crowd_df['Human Count'].max()}
@@ -425,19 +518,19 @@ Duration: {len(crowd_df)} frames
 
 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
 
-        ax4.text(0.05, 0.95, stats_text, fontsize=11, verticalalignment='top',
-                bbox=dict(boxstyle="round,pad=0.5", facecolor="lightyellow", alpha=0.8),
-                transform=ax4.transAxes, fontfamily='monospace')
-        ax4.set_xlim(0, 1)
-        ax4.set_ylim(0, 1)
-        ax4.axis('off')
+        ax_summary.text(0.02, 0.98, stats_text, fontsize=12, verticalalignment='top',
+                        bbox=dict(boxstyle="round,pad=0.8", facecolor="lightyellow", alpha=0.95),
+                        transform=ax_summary.transAxes, fontfamily='monospace')
+        ax_summary.set_xlim(0, 1)
+        ax_summary.set_ylim(0, 1)
+        ax_summary.axis('off')
 
         plt.tight_layout()
 
         # Save analytics dashboard
         dashboard_path = output_dir / 'analytics_dashboard.png'
         return safe_plot_save(plt, dashboard_path, "Analytics Dashboard")
-        
+
     except Exception as e:
         print(f"   ❌ Error generating analytics summary plot: {str(e)}")
         return False

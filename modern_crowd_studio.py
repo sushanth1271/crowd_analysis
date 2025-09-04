@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageTk
 import json
+import io
 
 # Set appearance mode and color theme
 ctk.set_appearance_mode("dark")  # "system", "light", "dark"
@@ -728,8 +729,9 @@ class CrowdAnalysisStudio:
                                   font=ctk.CTkFont(size=16, weight="bold"))
         plots_title.pack(pady=(20, 15))
         
-        # List available plots
+        # List available plots sorted by modification time (newest first)
         plot_files = [f for f in os.listdir(plots_dir) if f.endswith('.png')]
+        plot_files = sorted(plot_files, key=lambda p: os.path.getmtime(os.path.join(plots_dir, p)), reverse=True)
         if not plot_files:
             no_plots_label = ctk.CTkLabel(plots_frame, 
                                          text="No plot files found in generated_plots directory",
@@ -875,11 +877,26 @@ class CrowdAnalysisStudio:
             plot_window.title(f"Analysis Plot - {plot_filename}")
             plot_window.geometry("800x600")
             
-            # Load and display image
-            image = Image.open(plot_path)
+            # Load and display image ensuring a fresh read from disk (avoid caching)
+            img_bytes = None
+            attempts = 0
+            while attempts < 6:
+                try:
+                    with open(plot_path, 'rb') as f:
+                        img_bytes = f.read()
+                    if img_bytes and len(img_bytes) > 100:
+                        break
+                except Exception:
+                    pass
+                attempts += 1
+                time.sleep(0.15)
+            if not img_bytes:
+                print(f"Error loading image after retries: {plot_path}")
+                return
+            image = Image.open(io.BytesIO(img_bytes))
             image = image.resize((780, 580), Image.Resampling.LANCZOS)
             photo = ImageTk.PhotoImage(image)
-            
+
             label = tk.Label(plot_window, image=photo)
             label.image = photo  # Keep a reference
             label.pack(padx=10, pady=10)
@@ -1076,12 +1093,24 @@ class CrowdAnalysisStudio:
                     # Generate plots with original visualization system
                     self.show_status("🎨 Generating visualization plots...", "blue")
                     
-                    # Always use original plot generator for consistent results
-                    plot_script = "generate_all_plots.py"
-                    
-                    print(f"📊 Using original plot generator: {plot_script}")
-                    plot_result = subprocess.run([sys.executable, plot_script], 
-                                               capture_output=True, text=True, cwd=os.getcwd())
+                    # Pick platform-appropriate plot generator. Prefer Windows-specific script when on Windows.
+                    win_script = 'generate_all_plots_windows.py'
+                    orig_script = 'generate_all_plots.py'
+                    if sys.platform.startswith('win') and os.path.exists(win_script):
+                        plot_script = win_script
+                    else:
+                        plot_script = orig_script
+
+                    print(f"📊 Using plot generator: {plot_script}")
+                    # Ensure matplotlib can write its runtime config inside the workspace to avoid permission issues on Windows
+                    env = os.environ.copy()
+                    mpl_tmp = os.path.join(os.getcwd(), 'generated_plots', '.mplconfig')
+                    env['MPLCONFIGDIR'] = mpl_tmp
+                    env['PYTHONIOENCODING'] = 'utf-8'
+                    os.makedirs(mpl_tmp, exist_ok=True)
+
+                    plot_result = subprocess.run([sys.executable, plot_script],
+                                                 capture_output=True, text=True, cwd=os.getcwd(), env=env)
                     
                     if plot_result.returncode == 0:
                         print("✅ Plots generated successfully")
@@ -1092,6 +1121,12 @@ class CrowdAnalysisStudio:
                         print(f"Plot generator output: {plot_result.stdout}")
                         self.show_status("⚠️ Analysis complete, but plot generation had issues", "orange")
                         self.show_status("✅ Analysis complete (plot issues)", "orange")
+
+                    # Refresh plots dashboard so GUI shows latest files (do this regardless of success)
+                    try:
+                        self.root.after(200, self.create_plots_dashboard)
+                    except Exception:
+                        pass
                 else:
                     print(f"❌ Background analysis failed: {result.stderr}")
                     self.show_status("⚠️ Live analysis done, data processing issues", "orange")
@@ -1143,8 +1178,21 @@ class CrowdAnalysisStudio:
                 self.show_status("📊 ANALYSIS PHASE 5 - Generating visualization plots...", "blue")
                 self.update_progress_panel("90%", "📈 Generating Plots")
                 print("📊 Generating visualization plots...")
-                plot_result = subprocess.run([sys.executable, 'generate_all_plots.py'], 
-                                           capture_output=True, text=True, cwd=os.getcwd())
+                win_script = 'generate_all_plots_windows.py'
+                orig_script = 'generate_all_plots.py'
+                if sys.platform.startswith('win') and os.path.exists(win_script):
+                    plot_script = win_script
+                else:
+                    plot_script = orig_script
+
+                env = os.environ.copy()
+                mpl_tmp = os.path.join(os.getcwd(), 'generated_plots', '.mplconfig')
+                env['MPLCONFIGDIR'] = mpl_tmp
+                env['PYTHONIOENCODING'] = 'utf-8'
+                os.makedirs(mpl_tmp, exist_ok=True)
+
+                plot_result = subprocess.run([sys.executable, plot_script], 
+                                           capture_output=True, text=True, cwd=os.getcwd(), env=env)
                 
                 if plot_result.returncode == 0:
                     print("✅ Plot generation completed successfully")
@@ -1156,6 +1204,11 @@ class CrowdAnalysisStudio:
                     # Mark analysis as completed and load final real statistics
                     self.analysis_completed = True
                     self.root.after(0, self.load_final_statistics)
+                # Refresh plots dashboard so GUI shows latest files (do this regardless of success)
+                try:
+                    self.root.after(200, self.create_plots_dashboard)
+                except Exception:
+                    pass
                     
                     # Update results panel with key metrics
                     self.root.after(500, self.update_results_with_final_stats)
