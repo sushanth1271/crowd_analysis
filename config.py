@@ -2,7 +2,7 @@ import datetime
 
 # Video Path
 VIDEO_CONFIG = {
-	"VIDEO_CAP" : "C:/Users/Ramesh/Downloads/mall.mp4",
+	"VIDEO_CAP" : "C:/Users/Ramesh/Downloads/WhatsApp Video 2025-08-28 at 22.06.36_ab094844.mp4",
 	"IS_CAM" : False,
 	"CAM_APPROX_FPS": 3,
 	"HIGH_CAM": True,
